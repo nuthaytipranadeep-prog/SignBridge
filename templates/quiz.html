@@ -1,0 +1,244 @@
+{% extends "base.html" %}
+{% block title %}Quiz - SignBridge{% endblock %}
+
+{% block content %}
+<section class="record">
+  <h1>Quiz</h1>
+  <p id="status">Loading hand model... (needs internet)</p>
+
+  <!-- Start screen -->
+  <div id="startPanel">
+    <p class="sub">You will be asked to show up to 10 signs. You have 15 seconds for each one.<br>
+    A correct sign scores 10 points plus 1 point for every second left.</p>
+    <button id="startBtn" class="btn" disabled>Start quiz</button>
+  </div>
+
+  <!-- Game screen -->
+  <div id="gamePanel" style="display:none;">
+    <div class="quiz-bar">
+      <span id="qnum">Question 1</span>
+      <span>Time: <strong id="timer">15</strong>s</span>
+      <span>Score: <strong id="score">0</strong></span>
+    </div>
+    <h2 id="prompt"></h2>
+  </div>
+
+  <div class="box">
+    <video id="cam" autoplay playsinline muted></video>
+    <canvas id="out" width="640" height="480"></canvas>
+  </div>
+
+  <div id="result" class="result neutral" style="display:none;"></div>
+  <button id="skipBtn" class="btn secondary" style="display:none;">Skip this sign</button>
+
+  <!-- End screen -->
+  <div id="endPanel" style="display:none;">
+    <h2>Quiz finished!</h2>
+    <p id="finalText" class="final"></p>
+    <button id="againBtn" class="btn">Play again</button>
+    <a class="btn secondary" href="{{ url_for('dashboard') }}">Dashboard</a>
+  </div>
+</section>
+
+<script type="module">
+  import { createLandmarker, normalize, HandLandmarker, DrawingUtils, startCamera }
+    from "{{ url_for('static', filename='hand.js') }}";
+
+  // ----- settings (change THRESHOLD to the strictness value that worked for you) -----
+  const THRESHOLD = 1.2;
+  const QUESTIONS = 10;
+  const TIME_PER = 15;
+
+  const $ = id => document.getElementById(id);
+  const statusEl = $("status"), video = $("cam"), canvas = $("out");
+  const ctx = canvas.getContext("2d");
+  const drawing = new DrawingUtils(ctx);
+
+  // ----- load samples -----
+  let samples = [];
+  try {
+    const resp = await fetch("/api/samples");
+    if (!resp.ok) throw new Error("HTTP " + resp.status);
+    samples = await resp.json();
+  } catch (e) {
+    statusEl.textContent = "Could not load signs: " + e.message;
+    throw e;
+  }
+  const names = [...new Set(samples.map(s => s.name))];
+
+  if (names.length === 0) {
+    statusEl.textContent = "No signs recorded yet. Ask the admin to record some signs.";
+    throw new Error("no samples");
+  }
+
+  // ----- recognition (same as the Practice page) -----
+  function distance(a, b) {
+    let sum = 0;
+    for (let i = 0; i < a.length; i++) { const d = a[i] - b[i]; sum += d * d; }
+    return Math.sqrt(sum);
+  }
+  function recognise(vec) {
+    let best = null, bestDist = Infinity;
+    for (const s of samples) {
+      const d = distance(vec, s.points);
+      if (d < bestDist) { bestDist = d; best = s.name; }
+    }
+    return { name: best, dist: bestDist };
+  }
+  const history = [];
+  function smooth(name) {
+    history.push(name === null ? "__none__" : name);   // FIX: never confuse a real sign called "null"
+    if (history.length > 8) history.shift();
+    const counts = {};
+    for (const n of history) counts[n] = (counts[n] || 0) + 1;
+    let top = null, topCount = 0;
+    for (const n in counts) if (counts[n] > topCount) { top = n; topCount = counts[n]; }
+    return top === "__none__" ? null : top;
+  }
+
+  // ----- game state -----
+  let playing = false, paused = false;
+  let queue = [], idx = 0, target = null, deadline = 0;
+  let answers = [], score = 0, holdFrames = 0;
+
+  // ----- camera -----
+  const landmarker = await createLandmarker();
+  await startCamera(video, statusEl);
+  statusEl.textContent = "Camera ready";
+  $("startBtn").disabled = false;
+
+  function shuffle(arr) {
+    for (let i = arr.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [arr[i], arr[j]] = [arr[j], arr[i]];
+    }
+    return arr;
+  }
+
+  function showResult(text, cls) {
+    const r = $("result");
+    r.style.display = "block";
+    r.textContent = text;
+    r.className = "result " + cls;
+  }
+
+  function startQuiz() {
+    queue = shuffle([...names]).slice(0, QUESTIONS);
+    idx = 0; score = 0; answers = [];
+    $("score").textContent = "0";
+    $("startPanel").style.display = "none";
+    $("endPanel").style.display = "none";
+    $("gamePanel").style.display = "block";
+    $("skipBtn").style.display = "inline-block";
+    playing = true;
+    showQuestion();
+  }
+
+  function showQuestion() {
+    target = queue[idx];
+    deadline = performance.now() + TIME_PER * 1000;
+    holdFrames = 0;
+    history.length = 0;
+    paused = false;
+    $("timer").textContent = TIME_PER;
+    $("qnum").textContent = "Question " + (idx + 1) + " of " + queue.length;
+    $("prompt").textContent = "Show the sign: " + target;
+    showResult("Make the sign...", "neutral");
+  }
+
+  function record(correct, timeLeft) {
+    if (paused || !playing) return;
+    paused = true;
+    const tl = Math.max(0, Math.floor(timeLeft));        // FIX: send a whole number
+    answers.push({ name: target, correct: correct, time_left: tl });
+    if (correct) {
+      score += 10 + tl;
+      $("score").textContent = score;
+      showResult("✅ Correct! +" + (10 + tl), "good");
+    } else {
+      showResult("⏭ Missed: " + target, "bad");
+    }
+    setTimeout(() => {
+      idx++;
+      if (idx >= queue.length) finish();
+      else showQuestion();
+    }, 900);
+  }
+
+  async function finish() {
+    playing = false;
+    $("gamePanel").style.display = "none";
+    $("skipBtn").style.display = "none";
+    $("result").style.display = "none";
+    $("endPanel").style.display = "block";
+    $("finalText").textContent = "Saving your result...";
+    try {
+      const r = await fetch("/api/quiz/submit", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ answers: answers })
+      });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error || "Error");
+      $("finalText").textContent =
+        "You got " + d.correct + " of " + d.total + " correct. Score: " + d.score;
+    } catch (e) {
+      $("finalText").textContent = "Could not save your result: " + e.message;
+    }
+  }
+
+  $("startBtn").onclick = startQuiz;
+  $("againBtn").onclick = startQuiz;
+  $("skipBtn").onclick = () => { if (playing) record(false, 0); };
+
+  // ----- main loop -----
+  let lastVideoTime = -1;
+  let lastRes = null;
+
+  function loop() {
+    try {
+      // FIX: only run detection when the video is ready and has a NEW frame
+      if (video.readyState >= 2 && video.videoWidth > 0 && video.currentTime !== lastVideoTime) {
+        lastVideoTime = video.currentTime;
+        lastRes = landmarker.detectForVideo(video, performance.now());
+      }
+
+      if (lastRes) {
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        const hasHand = lastRes.landmarks.length > 0;
+
+        if (hasHand) {
+          const hand = lastRes.landmarks[0];
+          drawing.drawConnectors(hand, HandLandmarker.HAND_CONNECTIONS, { color: "#00ff88", lineWidth: 3 });
+          drawing.drawLandmarks(hand, { color: "#ff3366", radius: 3 });
+        }
+
+        if (playing && !paused) {
+          const timeLeft = (deadline - performance.now()) / 1000;
+          if (timeLeft <= 0) {
+            record(false, 0);
+          } else {
+            $("timer").textContent = Math.ceil(timeLeft);
+            if (hasHand) {
+              const r = recognise(normalize(lastRes.landmarks[0]));
+              const accepted = r.dist <= THRESHOLD;
+              const guess = smooth(accepted ? r.name : null);
+              if (guess === target) holdFrames++;
+              else holdFrames = 0;
+              if (holdFrames >= 6) record(true, timeLeft);
+            } else {
+              smooth(null);
+              holdFrames = 0;
+            }
+          }
+        }
+      }
+    } catch (e) {
+      console.error("Loop error:", e);   // FIX: one bad frame no longer freezes the whole quiz
+    }
+    requestAnimationFrame(loop);
+  }
+
+  loop();
+</script>
+{% endblock %}

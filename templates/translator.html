@@ -1,0 +1,166 @@
+{% extends "base.html" %}
+{% block title %}Translator - SignBridge{% endblock %}
+
+{% block content %}
+<section class="record">
+  <h1>Translator</h1>
+  <p class="sub">Hold each sign steady for half a second. Remove your hand for 2 seconds to add a space.</p>
+  <p id="status">Loading hand model... (needs internet)</p>
+
+  <div class="box">
+    <video id="cam" autoplay playsinline muted></video>
+    <canvas id="out" width="640" height="480"></canvas>
+  </div>
+
+  <p id="detecting" class="sub">Waiting for a hand...</p>
+  <progress id="hold" max="12" value="0"></progress>
+
+  <textarea id="text" rows="3" placeholder="Your signs will appear here..."></textarea>
+
+  <div>
+    <button id="speak" class="btn">🔊 Speak</button>
+    <button id="space" class="btn secondary">Space</button>
+    <button id="back" class="btn secondary">Backspace</button>
+    <button id="clear" class="btn secondary">Clear</button>
+  </div>
+
+  <label class="check">
+    <input type="checkbox" id="autospeak"> Speak each sign as it is added
+  </label>
+</section>
+
+<script type="module">
+  import { createLandmarker, normalize, HandLandmarker, DrawingUtils, startCamera }
+    from "{{ url_for('static', filename='hand.js') }}";
+
+  // ----- settings (use the strictness value that worked for you) -----
+  const THRESHOLD = 1.2;
+  const HOLD_FRAMES = 12;
+  const SPACE_AFTER_MS = 2000;
+
+  const $ = id => document.getElementById(id);
+  const status = $("status"), video = $("cam"), canvas = $("out");
+  const ctx = canvas.getContext("2d");
+  const drawing = new DrawingUtils(ctx);
+  const box = $("text");
+
+  // ----- state (declared early so buttons can use it safely) -----
+  let lastAdded = null, holdName = null, holdFrames = 0, gap = 0;
+  let lastSeen = performance.now();
+
+  // ----- load samples -----
+  const samples = await (await fetch("/api/samples")).json();
+  if (samples.length === 0) {
+    status.textContent = "No signs recorded yet. Ask the admin to record some signs.";
+    throw new Error("no samples");
+  }
+
+  // ----- recognition (same as Practice) -----
+  function distance(a, b) {
+    let sum = 0;
+    for (let i = 0; i < a.length; i++) { const d = a[i] - b[i]; sum += d * d; }
+    return Math.sqrt(sum);
+  }
+  function recognise(vec) {
+    let best = null, bestDist = Infinity;
+    for (const s of samples) {
+      const d = distance(vec, s.points);
+      if (d < bestDist) { bestDist = d; best = s.name; }
+    }
+    return { name: best, dist: bestDist };
+  }
+  const history = [];
+  function smooth(name) {
+    history.push(name);
+    if (history.length > 8) history.shift();
+    const counts = {};
+    for (const n of history) counts[n] = (counts[n] || 0) + 1;
+    let top = null, topCount = 0;
+    for (const n in counts) if (counts[n] > topCount) { top = n; topCount = counts[n]; }
+    return top === "null" ? null : top;
+  }
+
+  // ----- speech -----
+  function speak(text) {
+    if (!text.trim() || !("speechSynthesis" in window)) return;
+    window.speechSynthesis.cancel();
+    const u = new SpeechSynthesisUtterance(text);
+    u.lang = "en-US";
+    window.speechSynthesis.speak(u);
+  }
+
+  // ----- adding text -----
+  function addSign(name) {
+    let t = box.value;
+    const isWord = /[A-Za-z]{2,}/.test(name);    // "Hello" is a word; "A" and "10" are not
+    if (isWord) {
+      if (t && !t.endsWith(" ")) t += " ";
+      t += name + " ";
+    } else {                                     // a letter or number
+      t += name;
+    }
+    box.value = t;
+    if ($("autospeak").checked) speak(name);
+  }
+
+  $("speak").onclick = () => speak(box.value);
+  $("space").onclick = () => { if (!box.value.endsWith(" ")) box.value += " "; };
+  $("back").onclick = () => { box.value = box.value.slice(0, -1); };
+  $("clear").onclick = () => { box.value = ""; lastAdded = null; };
+
+  // ----- camera -----
+  const landmarker = await createLandmarker();
+  await startCamera(video, status);
+  status.textContent = "Camera ready";
+  lastSeen = performance.now();
+
+  function loop() {
+    const now = performance.now();
+    const res = landmarker.detectForVideo(video, now);
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    let stable = null;
+    if (res.landmarks.length > 0) {
+      const hand = res.landmarks[0];
+      lastSeen = now;
+      drawing.drawConnectors(hand, HandLandmarker.HAND_CONNECTIONS, { color: "#00ff88", lineWidth: 3 });
+      drawing.drawLandmarks(hand, { color: "#ff3366", radius: 3 });
+      const r = recognise(normalize(hand));
+      const accepted = r.dist <= THRESHOLD ? r.name : null;
+      stable = smooth(accepted === null ? "null" : accepted);
+    } else {
+      history.length = 0;
+    }
+
+    if (stable === null) {
+      gap++;
+      holdName = null;
+      holdFrames = 0;
+      if (gap >= 10) lastAdded = null;           // allows the same sign again
+      $("detecting").textContent = res.landmarks.length ? "Not sure yet..." : "Waiting for a hand...";
+    } else {
+      gap = 0;
+      if (stable === lastAdded) {
+        $("detecting").textContent = "Added: " + stable + " (change sign or lower your hand to repeat)";
+      } else {
+        if (stable === holdName) holdFrames++;
+        else { holdName = stable; holdFrames = 1; }
+        $("detecting").textContent = "Detecting: " + stable;
+        if (holdFrames >= HOLD_FRAMES) {
+          addSign(stable);
+          lastAdded = stable;
+          holdFrames = 0;
+        }
+      }
+    }
+    $("hold").value = holdFrames;
+
+    // automatic space when the hand has been away for a while
+    if (now - lastSeen > SPACE_AFTER_MS && box.value && !box.value.endsWith(" ")) {
+      box.value += " ";
+    }
+    requestAnimationFrame(loop);
+  }
+  loop();
+</script>
+{% endblock %}

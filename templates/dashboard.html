@@ -1,0 +1,117 @@
+{% extends "base.html" %}
+{% block title %}Dashboard - SignBridge{% endblock %}
+
+{% block content %}
+<section class="dash">
+  <h1>Welcome, {{ session.get('username') }}</h1>
+
+  <div class="stat-grid">
+    <div class="stat"><span>{{ stats['quizzes'] }}</span>Quizzes played</div>
+    <div class="stat"><span>{{ stats['best'] }}</span>Best score</div>
+    <div class="stat"><span>{{ accuracy }}%</span>Accuracy</div>
+    <div class="stat"><span>{{ learned }} / {{ ready }}</span>Signs mastered</div>
+  </div>
+
+  <div class="dash-actions">
+    <a class="btn" href="{{ url_for('quiz') }}">Take a quiz</a>
+    <a class="btn secondary" href="{{ url_for('practice') }}">Practice</a>
+    <a class="btn secondary" href="{{ url_for('learn') }}">Learn</a>
+  </div>
+
+  {% if history %}
+  <div class="dash-cols">
+    <div class="panel">
+      <h2>Score over time</h2>
+      <canvas id="scoreChart"></canvas>
+    </div>
+    <div class="panel">
+      <h2>Most practised signs</h2>
+      {% if sign_values %}
+        <canvas id="signChart"></canvas>
+        <script type="application/json" id="sign-data">{{ {'labels': sign_labels, 'values': sign_values}|tojson }}</script>
+      {% else %}
+        <p class="sub">Get a sign correct in a quiz to see it here.</p>
+      {% endif %}
+    </div>
+  </div>
+
+  <div class="panel">
+    <h2>Recent quizzes</h2>
+    <table class="admin-table">
+      <tr><th>When</th><th>Correct</th><th>Score</th></tr>
+      {% for h in history %}
+      <tr>
+        <td>{{ h['created_at'] }}</td>
+        <td>{{ h['correct'] }} / {{ h['total'] }}</td>
+        <td>{{ h['score'] }}</td>
+      </tr>
+      {% endfor %}
+    </table>
+  </div>
+  {% else %}
+    <p class="sub">You have not played a quiz yet. Take one and your progress will appear here.</p>
+  {% endif %}
+
+  <div class="panel">
+    <h2>Leaderboard</h2>
+    {% if leaders %}
+    <table class="admin-table">
+      <tr><th>#</th><th>Player</th><th>Best score</th><th>Quizzes</th></tr>
+      {% for l in leaders %}
+      <tr {% if l['username'] == session.get('username') %}class="me"{% endif %}>
+        <td>{{ loop.index }}</td>
+        <td>{{ l['username'] }}</td>
+        <td>{{ l['best'] }}</td>
+        <td>{{ l['quizzes'] }}</td>
+      </tr>
+      {% endfor %}
+    </table>
+    {% else %}
+      <p class="sub">No quiz results yet.</p>
+    {% endif %}
+  </div>
+</section>
+
+{% if history %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<script type="application/json" id="score-data">{{ {'labels': score_labels, 'values': score_values}|tojson }}</script>
+<script>
+  Chart.defaults.color = "#cbd5e1";
+  Chart.defaults.borderColor = "#334155";
+
+  const scoreData = JSON.parse(document.getElementById("score-data").textContent);
+  const scoreLabels = scoreData.labels;
+  const scoreValues = scoreData.values;
+
+  new Chart(document.getElementById("scoreChart"), {
+    type: "line",
+    data: {
+      labels: scoreLabels,
+      datasets: [{ label: "Score", data: scoreValues,
+                   borderColor: "#2dd4bf", backgroundColor: "#2dd4bf33",
+                   fill: true, tension: 0.3 }]
+    },
+    options: { plugins: { legend: { display: false } },
+               scales: { y: { beginAtZero: true } } }
+  });
+
+  const signCanvas = document.getElementById("signChart");
+  if (signCanvas) {
+    const signData = JSON.parse(document.getElementById("sign-data").textContent);
+    const signLabels = signData.labels;
+    const signValues = signData.values;
+
+    new Chart(signCanvas, {
+      type: "bar",
+      data: {
+        labels: signLabels,
+        datasets: [{ label: "Times correct", data: signValues,
+                     backgroundColor: "#2dd4bf" }]
+      },
+      options: { plugins: { legend: { display: false } },
+                 scales: { y: { beginAtZero: true, ticks: { precision: 0 } } } }
+    });
+  }
+</script>
+{% endif %}
+{% endblock %}

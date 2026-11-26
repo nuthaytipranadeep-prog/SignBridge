@@ -1,0 +1,73 @@
+{% extends "base.html" %}
+{% block title %}Learn - SignBridge{% endblock %}
+
+{% block content %}
+<section class="learn">
+  <h1>Learn signs</h1>
+  <p class="sub">Pick a sign to see its details. Signs marked "Ready to practise" can be checked with your camera.</p>
+
+  <div class="tabs">
+    <a href="{{ url_for('learn') }}" class="{{ 'active' if category == 'All' else '' }}">All</a>
+    <a href="{{ url_for('learn', category='Alphabet') }}" class="{{ 'active' if category == 'Alphabet' else '' }}">Alphabet</a>
+    <a href="{{ url_for('learn', category='Numbers') }}" class="{{ 'active' if category == 'Numbers' else '' }}">Numbers</a>
+    <a href="{{ url_for('learn', category='Words') }}" class="{{ 'active' if category == 'Words' else '' }}">Words</a>
+  </div>
+
+  <div class="sign-grid">
+    {% for s in signs %}
+      <div class="sign-card">
+        {% if s['samples'] > 0 %}
+  <canvas class="hand-shape" width="280" height="280" data-id="{{ s['id'] }}"></canvas>
+{% endif %}
+        <div class="sign-name">{{ s['name'] }}</div>
+        <div class="sign-cat">{{ s['category'] }}</div>
+        <p class="sign-desc">
+          {% if s['description'] %}{{ s['description'] }}{% else %}Description coming soon.{% endif %}
+        </p>
+        {% if s['samples'] > 0 %}
+          <span class="badge ready">Ready to practise</span>
+        {% else %}
+          <span class="badge pending">Not recorded yet</span>
+        {% endif %}
+      </div>
+    {% endfor %}
+  </div>
+</section>
+<script type="application/json" id="shapes">{{ shapes|tojson }}</script>
+<script>
+  const shapes = JSON.parse(document.getElementById("shapes").textContent);
+  const LINKS = [[0,1],[1,2],[2,3],[3,4],[0,5],[5,6],[6,7],[7,8],[5,9],[9,10],[10,11],[11,12],
+                 [9,13],[13,14],[14,15],[15,16],[13,17],[17,18],[18,19],[19,20],[0,17]];
+
+  document.querySelectorAll("canvas.hand-shape").forEach(c => {
+    const flat = shapes[c.dataset.id];
+    if (!flat) return;
+
+    const pts = [];
+    for (let i = 0; i < 42; i += 2) pts.push([-flat[i], flat[i + 1]]);
+
+    const xs = pts.map(p => p[0]), ys = pts.map(p => p[1]);
+    const minX = Math.min(...xs), maxX = Math.max(...xs);
+    const minY = Math.min(...ys), maxY = Math.max(...ys);
+    const pad = 28, size = c.width - pad * 2;
+    const scale = size / (Math.max(maxX - minX, maxY - minY) || 1);
+    const offX = pad + (size - (maxX - minX) * scale) / 2;
+    const offY = pad + (size - (maxY - minY) * scale) / 2;
+    const at = p => [offX + (p[0] - minX) * scale, offY + (p[1] - minY) * scale];
+
+    const ctx = c.getContext("2d");
+    ctx.lineCap = "round";
+    ctx.strokeStyle = "#2dd4bf";
+    ctx.lineWidth = 6;
+    for (const [a, b] of LINKS) {
+      const [x1, y1] = at(pts[a]), [x2, y2] = at(pts[b]);
+      ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke();
+    }
+    ctx.fillStyle = "#e2e8f0";
+    pts.forEach((p, i) => {
+      const [x, y] = at(p);
+      ctx.beginPath(); ctx.arc(x, y, i === 0 ? 8 : 5, 0, Math.PI * 2); ctx.fill();
+    });
+  });
+</script>
+{% endblock %}

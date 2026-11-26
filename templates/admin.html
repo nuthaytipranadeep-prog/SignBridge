@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+{% block title %}Admin - SignBridge{% endblock %}
+
+{% block content %}
+<section class="learn">
+  <h1>Admin: manage signs</h1>
+
+  <form method="POST" class="inline-form">
+    <input type="text" name="name" placeholder="New sign name (e.g. Hello)" required>
+    <select name="category">
+      <option>Words</option>
+      <option>Alphabet</option>
+      <option>Numbers</option>
+    </select>
+    <button type="submit" class="btn small-btn">Add sign</button>
+  </form>
+
+  <table class="admin-table">
+    <tr>
+      <th>Sign</th><th>Category</th><th>Description</th><th>Samples</th><th>Actions</th>
+    </tr>
+    {% for s in signs %}
+    <tr>
+      <td><strong>{{ s['name'] }}</strong></td>
+      <td>{{ s['category'] }}</td>
+      <td>
+        <form method="POST" action="{{ url_for('update_description', sign_id=s['id']) }}" class="desc-form">
+          <input type="text" name="description" value="{{ s['description'] }}" placeholder="How to make this sign">
+          <button type="submit" class="mini">Save</button>
+        </form>
+      </td>
+      <td>{{ s['samples'] }}</td>
+      <td class="actions">
+        <a class="mini" href="{{ url_for('record', sign_id=s['id']) }}">Record</a>
+        {% if s['samples'] > 0 %}
+          <form method="POST" action="{{ url_for('clear_samples', sign_id=s['id']) }}"
+            onsubmit="return confirm(this.dataset.confirm);"
+            data-confirm="Delete all samples for {{ s['name'] }}?">
+          <button type="submit" class="mini danger">Clear</button>
+        </form>
+        {% endif %}
+      </td>
+    </tr>
+    {% endfor %}
+  </table>
+</section>
+{% endblock %}

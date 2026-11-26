@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+
+{% block content %}
+<section class="hero">
+  <h1>Learn sign language.<br>Right from your webcam.</h1>
+  <p>SignBridge watches your hands in real time, checks the signs you make, and helps you practise, one sign at a time.</p>
+  <div class="hero-buttons">
+    <a class="btn" href="{{ url_for('static', filename='handtest.html') }}">Try the camera</a>
+  </div>
+</section>
+
+<section class="features">
+  <div class="feature">
+    <h3>📚 Learn</h3>
+    <p>Browse signs for the alphabet, numbers and everyday words.</p>
+  </div>
+  <div class="feature">
+    <h3>🎯 Practise</h3>
+    <p>Live feedback tells you whether you made the sign correctly.</p>
+  </div>
+  <div class="feature">
+    <h3>🏆 Quiz</h3>
+    <p>Test yourself, earn scores and climb the leaderboard.</p>
+  </div>
+  <div class="feature">
+    <h3>🔊 Translate</h3>
+    <p>Sign to the camera and see your signs turned into text and speech.</p>
+  </div>
+</section>
+{% endblock %}

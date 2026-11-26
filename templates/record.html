@@ -1,0 +1,88 @@
+{% extends "base.html" %}
+{% block title %}Record {{ sign['name'] }} - SignBridge{% endblock %}
+
+{% block content %}
+<section class="record">
+  <h1>Record sign: {{ sign['name'] }}</h1>
+  <p class="sub">Make the sign, hold it steady, and capture. Vary your hand position and distance a little between captures.</p>
+
+  <p id="status">Loading hand model... (needs internet)</p>
+
+  <div class="box">
+    <video id="cam" autoplay playsinline muted></video>
+    <canvas id="out" width="640" height="480"></canvas>
+  </div>
+
+  <p>Samples saved for this sign: <strong id="count">{{ count }}</strong></p>
+
+  <div id="sign-data" data-sign-id="{{ sign['id'] }}" hidden></div>
+
+  <button id="capture" class="btn" disabled>Capture one sample</button>
+  <button id="burst" class="btn" disabled>Capture 15 (3 seconds)</button>
+  <a class="btn secondary" href="{{ url_for('admin') }}">Back to admin</a>
+</section>
+
+<script type="module">
+  import { createLandmarker, normalize, HandLandmarker, DrawingUtils, startCamera }
+    from "{{ url_for('static', filename='hand.js') }}";
+
+  const SIGN_ID = Number(document.getElementById("sign-data").dataset.signId);
+  const status = document.getElementById("status");
+  const video = document.getElementById("cam");
+  const canvas = document.getElementById("out");
+  const ctx = canvas.getContext("2d");
+  const drawing = new DrawingUtils(ctx);
+  const countEl = document.getElementById("count");
+  const captureBtn = document.getElementById("capture");
+  const burstBtn = document.getElementById("burst");
+
+  let latest = null;
+
+  const landmarker = await createLandmarker();
+  await startCamera(video, status);
+  captureBtn.disabled = false;
+  burstBtn.disabled = false;
+
+  function loop() {
+    const res = landmarker.detectForVideo(video, performance.now());
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    if (res.landmarks.length > 0) {
+      const hand = res.landmarks[0];
+      drawing.drawConnectors(hand, HandLandmarker.HAND_CONNECTIONS, { color: "#00ff88", lineWidth: 3 });
+      drawing.drawLandmarks(hand, { color: "#ff3366", radius: 3 });
+      latest = normalize(hand);
+      status.textContent = "Hand detected";
+    } else {
+      latest = null;
+      status.textContent = "No hand detected";
+    }
+    requestAnimationFrame(loop);
+  }
+  loop();
+
+  async function save() {
+    if (!latest) return false;
+    const r = await fetch("/api/samples/" + SIGN_ID, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ landmarks: latest })
+    });
+    if (!r.ok) return false;
+    countEl.textContent = (await r.json()).count;
+    return true;
+  }
+
+  captureBtn.onclick = async () => {
+    if (!(await save())) status.textContent = "No hand detected, nothing saved";
+  };
+
+  burstBtn.onclick = async () => {
+    captureBtn.disabled = burstBtn.disabled = true;
+    for (let i = 0; i < 15; i++) {
+      await save();
+      await new Promise(res => setTimeout(res, 200));
+    }
+    captureBtn.disabled = burstBtn.disabled = false;
+  };
+</script>
+{% endblock %}

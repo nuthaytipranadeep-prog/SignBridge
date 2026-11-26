@@ -1,0 +1,148 @@
+{% extends "base.html" %}
+{% block title %}Practice - SignBridge{% endblock %}
+
+{% block content %}
+<section class="record">
+  <h1>Practice</h1>
+
+  {% if signs %}
+  <div class="inline-form" style="justify-content:center;">
+    <label for="target">Sign to practise:</label>
+    <select id="target">
+      {% for s in signs %}
+        <option value="{{ s['name'] }}" data-desc="{{ s['description'] }}">{{ s['name'] }} ({{ s['category'] }})</option>
+      {% endfor %}
+    </select>
+    <button id="random" class="btn small-btn" type="button">Random sign</button>
+  </div>
+
+  <p id="desc" class="sub"></p>
+  <p id="status">Loading hand model... (needs internet)</p>
+
+  <div class="box">
+    <video id="cam" autoplay playsinline muted></video>
+    <canvas id="out" width="640" height="480"></canvas>
+  </div>
+
+  <div id="result" class="result neutral">Show your hand to the camera</div>
+  <p class="sub" id="detail"></p>
+
+  <div class="inline-form" style="justify-content:center;">
+    <label for="strict">Strictness (lower = stricter):</label>
+    <input type="range" id="strict" min="0.3" max="2.5" step="0.1" value="1.2">
+    <span id="strictVal">1.2</span>
+  </div>
+  {% else %}
+    <p>No signs have been recorded yet. Ask the admin to record some signs first.</p>
+  {% endif %}
+</section>
+
+{% if signs %}
+<script type="module">
+  import { createLandmarker, normalize, HandLandmarker, DrawingUtils, startCamera }
+    from "{{ url_for('static', filename='hand.js') }}";
+
+  const status = document.getElementById("status");
+  const video = document.getElementById("cam");
+  const canvas = document.getElementById("out");
+  const ctx = canvas.getContext("2d");
+  const drawing = new DrawingUtils(ctx);
+  const targetSel = document.getElementById("target");
+  const descEl = document.getElementById("desc");
+  const resultEl = document.getElementById("result");
+  const detailEl = document.getElementById("detail");
+  const strict = document.getElementById("strict");
+  const strictVal = document.getElementById("strictVal");
+
+  let holdFrames = 0;
+  const history = [];
+
+  // ---- target sign ----
+  function showDesc() {
+    const opt = targetSel.selectedOptions[0];
+    descEl.textContent = opt.dataset.desc ? "How to sign it: " + opt.dataset.desc : "";
+    holdFrames = 0;
+  }
+  targetSel.onchange = showDesc;
+  document.getElementById("random").onclick = () => {
+    targetSel.selectedIndex = Math.floor(Math.random() * targetSel.options.length);
+    showDesc();
+  };
+  strict.oninput = () => { strictVal.textContent = strict.value; };
+  showDesc();
+
+  // ---- load saved samples ----
+  const samples = await (await fetch("/api/samples")).json();
+
+  // ---- recognition ----
+  function distance(a, b) {
+    let sum = 0;
+    for (let i = 0; i < a.length; i++) { const d = a[i] - b[i]; sum += d * d; }
+    return Math.sqrt(sum);
+  }
+
+  function recognise(vec) {
+    let best = null, bestDist = Infinity;
+    for (const s of samples) {
+      const d = distance(vec, s.points);
+      if (d < bestDist) { bestDist = d; best = s.name; }
+    }
+    return { name: best, dist: bestDist };
+  }
+
+  function smooth(name) {
+    history.push(name);
+    if (history.length > 8) history.shift();
+    const counts = {};
+    for (const n of history) counts[n] = (counts[n] || 0) + 1;
+    let top = null, topCount = 0;
+    for (const n in counts) if (counts[n] > topCount) { top = n; topCount = counts[n]; }
+    return top === "null" ? null : top;
+  }
+
+  // ---- camera ----
+  const landmarker = await createLandmarker();
+  await startCamera(video, status);
+  status.textContent = "Camera ready";
+
+  function setResult(text, cls) {
+    resultEl.textContent = text;
+    resultEl.className = "result " + cls;
+  }
+
+  function loop() {
+    const res = landmarker.detectForVideo(video, performance.now());
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    if (res.landmarks.length > 0) {
+      const hand = res.landmarks[0];
+      drawing.drawConnectors(hand, HandLandmarker.HAND_CONNECTIONS, { color: "#00ff88", lineWidth: 3 });
+      drawing.drawLandmarks(hand, { color: "#ff3366", radius: 3 });
+
+      const r = recognise(normalize(hand));
+      const accepted = r.dist <= parseFloat(strict.value) ? r.name : null;
+      const stable = smooth(accepted === null ? "null" : accepted);
+      detailEl.textContent = "Closest: " + r.name + " (distance " + r.dist.toFixed(2) + ")";
+
+      const target = targetSel.value;
+      if (stable === target) {
+        holdFrames++;
+        if (holdFrames >= 10) setResult("✅ Correct! That is " + target, "good");
+        else setResult("Hold it...", "neutral");
+      } else {
+        holdFrames = 0;
+        if (stable) setResult("❌ That looks like " + stable + ". Try " + target, "bad");
+        else setResult("Not sure yet. Try " + target, "neutral");
+      }
+    } else {
+      history.length = 0;
+      holdFrames = 0;
+      detailEl.textContent = "";
+      setResult("Show your hand to the camera", "neutral");
+    }
+    requestAnimationFrame(loop);
+  }
+  loop();
+</script>
+{% endif %}
+{% endblock %}
